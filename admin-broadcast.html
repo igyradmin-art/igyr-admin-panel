@@ -591,11 +591,18 @@
                 btn.innerHTML = '🚀 Send Push Notification to All Devices';
 
                 if (ok && data.success) {
-                    statusMsg.style.display = 'inline';
-                    statusMsg.style.color = '#059669';
-                    statusMsg.textContent = `✅ Successfully sent to ${data.sent_count} device(s)!`;
-                    const cleanNote = data.cleaned_count > 0 ? `\n🧹 Removed ${data.cleaned_count} uninstalled/deleted device(s)` : '';
-                    alert(`✅ Push Notification Sent!\n\nDelivered: ${data.sent_count} device(s)\nFailed: ${data.failure_count || 0}${cleanNote}\nActive Subscribers Remaining: ${data.total_devices || data.sent_count}`);
+                    if (data.is_key_expired) {
+                        statusMsg.style.display = 'inline';
+                        statusMsg.style.color = '#d97706';
+                        statusMsg.textContent = '📢 Notice Published to Portal! (FCM Key Needs Update in Firebase Console)';
+                        alert(`📢 Official Notice Published to Portal!\n\nYour broadcast announcement has been saved and is now live across the portal for all visitors.\n\n⚠️ Note on Background Phone Push:\nGoogle Cloud rejected key ID 4cb1188a (Invalid JWT Signature - key was deleted in Firebase Console).\n\nTo enable lockscreen phone push:\n1. Open Firebase Console: https://console.firebase.google.com/project/igyr-53359/settings/serviceaccounts/adminsdk\n2. Click "Generate new private key"\n3. Update FIREBASE_SERVICE_ACCOUNT_JSON in Render.`);
+                    } else {
+                        statusMsg.style.display = 'inline';
+                        statusMsg.style.color = '#059669';
+                        statusMsg.textContent = `✅ Successfully sent to ${data.sent_count} device(s)!`;
+                        const cleanNote = data.cleaned_count > 0 ? `\n🧹 Removed ${data.cleaned_count} uninstalled/deleted device(s)` : '';
+                        alert(`✅ Push Notification Sent!\n\nDelivered: ${data.sent_count} device(s)\nFailed: ${data.failure_count || 0}${cleanNote}\nActive Subscribers Remaining: ${data.total_devices || data.sent_count}`);
+                    }
                     loadFcmStats();
                 } else {
                     statusMsg.style.display = 'inline';
@@ -632,7 +639,11 @@
 
                 if (ok && data.success) {
                     countEl.textContent = data.total_subscribers;
-                    alert(`✅ Subscriber Verification Complete!\n\nActive Devices: ${data.total_subscribers}\nUninstalled / Revoked Devices Removed: ${data.cleaned_count}`);
+                    if (data.is_key_expired) {
+                        alert(`ℹ️ Total Registered Subscribers: ${data.total_subscribers}\n\n⚠️ Google FCM dry-run verification was paused because key ID 4cb1188a is expired on Firebase Console.\n\nAll subscriber tokens remain safely registered in your database.`);
+                    } else {
+                        alert(`✅ Subscriber Verification Complete!\n\nActive Devices: ${data.total_subscribers}\nUninstalled / Revoked Devices Removed: ${data.cleaned_count || 0}`);
+                    }
                 } else {
                     alert('Sync error: ' + (data.error || 'Failed to sync subscribers'));
                 }
