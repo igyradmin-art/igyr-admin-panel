@@ -108,7 +108,13 @@ function syncWithServer(silent = true) {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
     
-    return fetch(API_BASE + '/sync', controller ? { signal: controller.signal } : {})
+    const syncUrl = API_BASE + '/sync?_v=' + Date.now();
+    return fetch(syncUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache' },
+        signal: controller ? controller.signal : undefined
+    })
         .then(res => {
             if (timeoutId) clearTimeout(timeoutId);
             if (!res.ok) throw new Error("Sync failed with status " + res.status);
@@ -142,6 +148,7 @@ function syncWithServer(silent = true) {
             if (!silent) console.warn("Background sync warning:", err);
         });
 }
+
 
 // Launch non-blocking sync in background immediately
 syncWithServer(true);

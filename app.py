@@ -594,88 +594,123 @@ def sync_data():
 def save_institutes():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
         current_institutes = {inst['id']: inst.get('password') for inst in institutes_col.find({}, {'id': 1, 'password': 1, '_id': 0}) if 'id' in inst}
+        clean_list = []
         for inst in data:
-            if 'id' in inst and inst['id'] in current_institutes and current_institutes[inst['id']]:
-                inst['password'] = current_institutes[inst['id']]
+            if isinstance(inst, dict):
+                clean_inst = {k: v for k, v in inst.items() if k != '_id'}
+                if 'id' in clean_inst:
+                    if not clean_inst.get('password') and clean_inst['id'] in current_institutes:
+                        clean_inst['password'] = current_institutes[clean_inst['id']]
+                clean_list.append(clean_inst)
         institutes_col.delete_many({})
-        institutes_col.insert_many(data)
+        if clean_list:
+            institutes_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "Institutes saved"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Institutes saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/results', methods=['POST'])
 def save_results():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for r in data:
+            if isinstance(r, dict):
+                clean_r = {k: v for k, v in r.items() if k != '_id'}
+                clean_list.append(clean_r)
         results_col.delete_many({})
-        results_col.insert_many(data)
+        if clean_list:
+            results_col.insert_many(clean_list)
         invalidate_sync_cache()
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
         try:
-            latest = data[-1] if isinstance(data, list) else data
-            title = latest.get("title") or latest.get("candidateName") or "New Result Published"
-            body = f"Examination results published for {latest.get('examName', 'Students')}. Tap to check marks."
-            send_push_notification_to_all(title, body, url="/search-result.html")
+            if clean_list:
+                latest = clean_list[-1]
+                title = latest.get("title") or latest.get("candidateName") or "New Result Published"
+                body = f"Examination results published for {latest.get('examName', 'Students')}. Tap to check marks."
+                send_push_notification_to_all(title, body, url="/search-result.html")
         except Exception:
             pass
-    return jsonify({"message": "Results saved"})
+    return jsonify({"success": True, "message": "Results saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/notices', methods=['POST'])
 def save_notices():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for n in data:
+            if isinstance(n, dict):
+                clean_n = {k: v for k, v in n.items() if k != '_id'}
+                clean_list.append(clean_n)
         notices_col.delete_many({})
-        notices_col.insert_many(data)
+        if clean_list:
+            notices_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "Notices saved"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Notices saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/quicklinks', methods=['POST'])
 def save_quicklinks():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
-        quicklinks_col.delete_many({})
+    quicklinks_col.delete_many({})
+    if data is not None:
         quicklinks_col.insert_one({"links": data})
-        invalidate_sync_cache()
-    return jsonify({"message": "Quicklinks saved"})
+    invalidate_sync_cache()
+    settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Quicklinks saved"}), 200
 
 @app.route('/api/schemes', methods=['POST'])
 def save_schemes():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for s in data:
+            if isinstance(s, dict):
+                clean_s = {k: v for k, v in s.items() if k != '_id'}
+                clean_list.append(clean_s)
         schemes_col.delete_many({})
-        schemes_col.insert_many(data)
+        if clean_list:
+            schemes_col.insert_many(clean_list)
         invalidate_sync_cache()
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
         try:
-            latest = data[-1] if isinstance(data, list) else data
-            title = latest.get("name") or "New Government Scheme Announced"
-            body = latest.get("benefit") or "Check your eligibility and apply online now on IGYR."
-            send_push_notification_to_all(title, body, url="/schemes.html")
+            if clean_list:
+                latest = clean_list[-1]
+                title = latest.get("name") or "New Government Scheme Announced"
+                body = latest.get("benefit") or "Check your eligibility and apply online now on IGYR."
+                send_push_notification_to_all(title, body, url="/schemes.html")
         except Exception:
             pass
-    return jsonify({"message": "Schemes saved"})
+    return jsonify({"success": True, "message": "Schemes saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/applications', methods=['POST'])
 def save_application():
     data = request.json
     if data:
-        applications_col.update_one({"id": data.get("id")}, {"$set": data}, upsert=True)
+        clean_app = {k: v for k, v in data.items() if k != '_id'}
+        applications_col.update_one({"id": clean_app.get("id")}, {"$set": clean_app}, upsert=True)
         invalidate_sync_cache()
-    return jsonify({"message": "Application saved successfully"})
+    return jsonify({"success": True, "message": "Application saved successfully"}), 200
 
 @app.route('/api/applications/save-all', methods=['POST'])
 def save_all_applications():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data is not None:
+    if data is not None and isinstance(data, list):
+        clean_list = [{k: v for k, v in a.items() if k != '_id'} for a in data if isinstance(a, dict)]
         applications_col.delete_many({})
-        if len(data) > 0:
-            applications_col.insert_many(data)
+        if clean_list:
+            applications_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "All applications saved successfully"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "All applications saved successfully", "count": len(data) if data else 0}), 200
+
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
