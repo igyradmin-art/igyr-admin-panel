@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: igyr-admin-panel
+    env: python
+    region: oregon
+    plan: free
+    branch: main
+    rootDir: admin
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.16
+      - key: MONGO_URI
+        sync: false

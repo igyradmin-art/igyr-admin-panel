@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- Favicon & Touch Icons -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/favicon-512x512.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="manifest" href="/site.webmanifest">
+    <meta name="theme-color" content="#071d49">
+
+    <title>Login Institute</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+    <div class="dashboard">
+                <aside class="sidebar">
+            <h2>Super Admin</h2>
+            <ul>
+                <li><a href="admin-dashboard.html" >Dashboard</a></li>
+                <li><a href="admin-institutes.html" >Manage Institutes</a></li>
+                <li><a href="admin-schemes.html" >Manage Schemes</a></li>
+                <li><a href="admin-applications.html" >Submission Forms</a></li>
+                <li><a href="admin-broadcast.html">Broadcast &amp; Banner</a></li>
+                <li><a href="admin-settings.html" >System Settings</a></li>
+                <li><a href="admin-login-institute.html" class="active">Login Institute</a></li>
+                <li><a href="index.html">Logout</a></li>
+            </ul>
+        </aside>
+        <main class="main-content">
+            <h1>Login to Institute Panel</h1>
+            <div class="card" style="max-width: 500px; margin-top: 30px;">
+                <h2 style="color: var(--primary);">Access Institute</h2>
+                <p style="color: #666; margin-bottom: 20px; font-size: 0.95rem;">Enter the Institute's ID below to seamlessly log into their dedicated dashboard.</p>
+                <form id="admin-inst-login-form">
+                    <input type="text" id="target-inst-id" placeholder="Enter Institute ID (e.g., IGYR1234)" required>
+                    <button type="submit" class="btn btn-primary btn-block" style="margin-top: 15px; font-size: 1.1rem;">Login</button>
+                </form>
+            </div>
+        </main>
+    </div>
+    <script src="js/storage.js?v=1000035"></script>
+    <script src="js/admin.js?v=1000035"></script>
+</body>
+</html>
