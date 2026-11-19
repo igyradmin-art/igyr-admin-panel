@@ -278,6 +278,7 @@ def invalidate_sync_cache():
 
 @app.route('/health')
 @app.route('/api/health')
+@app.route('/admin/health')
 def admin_health():
     now = time.time()
     uptime_sec = int(now - SERVER_START_TIME)
