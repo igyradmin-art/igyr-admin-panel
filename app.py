@@ -61,6 +61,7 @@ try:
         fb_creds_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
         app_dir = os.path.dirname(os.path.abspath(__file__))
         sa_candidates = [
+            "/etc/secrets/firebase-service-account.json",
             os.path.join(app_dir, "firebase-service-account.json"),
             os.path.join(app_dir, "..", "firebase-service-account.json"),
             os.path.join(app_dir, "admin", "firebase-service-account.json"),
@@ -68,18 +69,47 @@ try:
         ]
         sa_file = next((f for f in sa_candidates if os.path.isfile(f)), None)
 
+        cred_dict = None
         if fb_creds_env:
-            cred = credentials.Certificate(json.loads(fb_creds_env))
+            raw_val = fb_creds_env.strip()
+            # Handle potential Base64 encoding
+            if not raw_val.startswith('{'):
+                try:
+                    import base64
+                    raw_val = base64.b64decode(raw_val).decode('utf-8')
+                except Exception:
+                    pass
+            try:
+                cred_dict = json.loads(raw_val)
+                print("✅ Parsed FIREBASE_SERVICE_ACCOUNT_JSON from environment variable.")
+            except Exception as parse_err:
+                print("⚠️ Error parsing FIREBASE_SERVICE_ACCOUNT_JSON:", parse_err)
+
+        if not cred_dict and sa_file:
+            try:
+                with open(sa_file, 'r', encoding='utf-8') as f:
+                    cred_dict = json.load(f)
+                print(f"✅ Loaded Firebase credentials from file: {sa_file}")
+            except Exception as file_err:
+                print(f"⚠️ Error reading {sa_file}:", file_err)
+
+        if cred_dict and isinstance(cred_dict, dict):
+            # CRITICAL FIX for "invalid_grant: Invalid JWT Signature":
+            # When pasted into environment variables or shells, actual newlines (\n)
+            # are frequently double-escaped into literal string characters "\\n".
+            # The RSA key parser requires real newlines (\n) to compute the correct signature.
+            if "private_key" in cred_dict and isinstance(cred_dict["private_key"], str):
+                pk = cred_dict["private_key"]
+                if "\\n" in pk:
+                    cred_dict["private_key"] = pk.replace("\\n", "\n")
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
-            print("✅ Firebase Admin SDK initialized from environment variable.")
-        elif sa_file:
-            cred = credentials.Certificate(sa_file)
-            firebase_admin.initialize_app(cred)
-            print(f"✅ Firebase Admin SDK initialized from file: {sa_file}")
+            print("✅ Firebase Admin SDK initialized successfully.")
         else:
             print("⚠️ Firebase Admin credentials not found.")
 except Exception as fb_init_err:
     print("⚠️ Firebase Admin SDK initialization error:", fb_init_err)
+
 
 def send_push_notification_to_all(title, body, url="/search-result.html"):
     try:
