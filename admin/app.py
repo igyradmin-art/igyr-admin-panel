@@ -17,6 +17,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import platform
+import re
 
 # Optional psutil for hardware telemetry
 try:
@@ -61,6 +62,7 @@ try:
         fb_creds_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
         app_dir = os.path.dirname(os.path.abspath(__file__))
         sa_candidates = [
+            "/etc/secrets/firebase-service-account.json",
             os.path.join(app_dir, "firebase-service-account.json"),
             os.path.join(app_dir, "..", "firebase-service-account.json"),
             os.path.join(app_dir, "admin", "firebase-service-account.json"),
@@ -68,28 +70,98 @@ try:
         ]
         sa_file = next((f for f in sa_candidates if os.path.isfile(f)), None)
 
+        cred_dict = None
         if fb_creds_env:
-            cred = credentials.Certificate(json.loads(fb_creds_env))
+            raw_val = fb_creds_env.strip()
+            # Handle potential Base64 encoding
+            if not raw_val.startswith('{'):
+                try:
+                    import base64
+                    raw_val = base64.b64decode(raw_val).decode('utf-8')
+                except Exception:
+                    pass
+            try:
+                cred_dict = json.loads(raw_val)
+                print("✅ Parsed FIREBASE_SERVICE_ACCOUNT_JSON from environment variable.")
+            except Exception as parse_err:
+                print("⚠️ Error parsing FIREBASE_SERVICE_ACCOUNT_JSON:", parse_err)
+
+        if not cred_dict and sa_file:
+            try:
+                with open(sa_file, 'r', encoding='utf-8') as f:
+                    cred_dict = json.load(f)
+                print(f"✅ Loaded Firebase credentials from file: {sa_file}")
+            except Exception as file_err:
+                print(f"⚠️ Error reading {sa_file}:", file_err)
+
+        if cred_dict and isinstance(cred_dict, dict):
+            # CRITICAL FIX for "invalid_grant: Invalid JWT Signature":
+            # When pasted into environment variables or shells, actual newlines (\n)
+            # are frequently double-escaped into literal string characters "\\n".
+            # The RSA key parser requires real newlines (\n) to compute the correct signature.
+            if "private_key" in cred_dict and isinstance(cred_dict["private_key"], str):
+                pk = cred_dict["private_key"]
+                if "\\n" in pk:
+                    cred_dict["private_key"] = pk.replace("\\n", "\n")
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
-            print("✅ Firebase Admin SDK initialized from environment variable.")
-        elif sa_file:
-            cred = credentials.Certificate(sa_file)
-            firebase_admin.initialize_app(cred)
-            print(f"✅ Firebase Admin SDK initialized from file: {sa_file}")
+            print("✅ Firebase Admin SDK initialized successfully.")
         else:
             print("⚠️ Firebase Admin credentials not found.")
 except Exception as fb_init_err:
     print("⚠️ Firebase Admin SDK initialization error:", fb_init_err)
 
+
 def send_push_notification_to_all(title, body, url="/search-result.html"):
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_date = datetime.utcnow().strftime("%b %d, %Y")
+    
+    # 1. Always persist broadcast notice in MongoDB so every visitor on the platform sees it
+    try:
+        notices_col.insert_one({
+            "title": str(title),
+            "text": str(body),
+            "content": str(body),
+            "date": now_date,
+            "timestamp": int(datetime.utcnow().timestamp() * 1000),
+            "type": "info",
+            "url": str(url),
+            "created_at": now_str
+        })
+        invalidate_sync_cache()
+    except Exception as n_err:
+        print("Notice persist error:", n_err)
+
+    try:
+        db['broadcast_logs'].insert_one({
+            "title": str(title),
+            "body": str(body),
+            "url": str(url),
+            "timestamp": now_str,
+            "epoch": int(datetime.utcnow().timestamp())
+        })
+    except Exception:
+        pass
+
+    # 2. Attempt FCM background push to devices
     try:
         if not firebase_admin._apps:
-            return {"success": False, "error": "Firebase Admin not initialized"}
+            return {
+                "success": True,
+                "sent_count": 0,
+                "published_to_portal": True,
+                "message": "Notice published to portal! (Firebase SDK not configured for phone push)"
+            }
 
         tokens_docs = list(fcm_tokens_col.find({}, {"token": 1, "_id": 0}))
         tokens = [d['token'] for d in tokens_docs if d.get('token')]
         if not tokens:
-            return {"success": True, "sent_count": 0, "message": "No registered devices yet."}
+            return {
+                "success": True,
+                "sent_count": 0,
+                "published_to_portal": True,
+                "message": "Notice published to portal! (No registered push devices yet)"
+            }
 
         success_count = 0
         failure_count = 0
@@ -139,9 +211,26 @@ def send_push_notification_to_all(title, body, url="/search-result.html"):
         if invalid_tokens:
             fcm_tokens_col.delete_many({"token": {"$in": invalid_tokens}})
 
-        return {"success": True, "sent_count": success_count, "failed_count": failure_count}
+        return {
+            "success": True,
+            "sent_count": success_count,
+            "failure_count": failure_count,
+            "published_to_portal": True
+        }
     except Exception as e:
+        err_str = str(e)
+        if "Invalid JWT Signature" in err_str or "invalid_grant" in err_str:
+            return {
+                "success": True,
+                "sent_count": 0,
+                "published_to_portal": True,
+                "is_key_expired": True,
+                "message": "Notice published to IGYR Portal successfully! (Firebase Key 4cb1188a is expired on Firebase Console)",
+                "error": "Google rejected key 4cb1188a (Invalid JWT Signature: key was revoked in Firebase Console).",
+                "help_url": "https://console.firebase.google.com/project/igyr-53359/settings/serviceaccounts/adminsdk"
+            }
         return {"success": False, "error": str(e)}
+
 
 # WhatsApp Automation Helpers
 def get_whatsapp_config():
@@ -278,6 +367,7 @@ def invalidate_sync_cache():
 
 @app.route('/health')
 @app.route('/api/health')
+@app.route('/admin/health')
 def admin_health():
     now = time.time()
     uptime_sec = int(now - SERVER_START_TIME)
@@ -408,6 +498,36 @@ def serve_inst_tab():
 def serve_inst_upload():
     return send_from_directory('.', 'institute-upload-result.html')
 
+@app.route('/announcement-banner.js')
+def serve_announcement_banner_root():
+    return send_from_directory('.', 'announcement-banner.js', mimetype='application/javascript')
+
+@app.route('/js/announcement-banner.js')
+def serve_announcement_banner_js():
+    return send_from_directory('js', 'announcement-banner.js', mimetype='application/javascript')
+
+# ==========================================
+# ERROR HANDLERS (Always return JSON for /api/ routes)
+# ==========================================
+
+@app.errorhandler(404)
+def handle_404(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"success": False, "error": f"API endpoint not found: {request.path}"}), 404
+    return send_from_directory('.', 'admin-login.html'), 404
+
+@app.errorhandler(405)
+def handle_405(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"success": False, "error": f"HTTP {request.method} not allowed for {request.path}"}), 405
+    return jsonify({"error": "Method not allowed"}), 405
+
+@app.errorhandler(500)
+def handle_500(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"success": False, "error": "Internal server error", "details": str(e)}), 500
+    return jsonify({"error": "Internal server error"}), 500
+
 
 # ==========================================
 # AUTHENTICATION APIS
@@ -475,88 +595,144 @@ def sync_data():
 def save_institutes():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
         current_institutes = {inst['id']: inst.get('password') for inst in institutes_col.find({}, {'id': 1, 'password': 1, '_id': 0}) if 'id' in inst}
+        clean_list = []
         for inst in data:
-            if 'id' in inst and inst['id'] in current_institutes and current_institutes[inst['id']]:
-                inst['password'] = current_institutes[inst['id']]
+            if isinstance(inst, dict):
+                clean_inst = {k: v for k, v in inst.items() if k != '_id'}
+                if 'id' in clean_inst:
+                    if not clean_inst.get('password') and clean_inst['id'] in current_institutes:
+                        clean_inst['password'] = current_institutes[clean_inst['id']]
+                clean_list.append(clean_inst)
         institutes_col.delete_many({})
-        institutes_col.insert_many(data)
+        if clean_list:
+            institutes_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "Institutes saved"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Institutes saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/results', methods=['POST'])
 def save_results():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for r in data:
+            if isinstance(r, dict):
+                clean_r = {k: v for k, v in r.items() if k != '_id'}
+                clean_list.append(clean_r)
         results_col.delete_many({})
-        results_col.insert_many(data)
+        if clean_list:
+            results_col.insert_many(clean_list)
         invalidate_sync_cache()
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
         try:
-            latest = data[-1] if isinstance(data, list) else data
-            title = latest.get("title") or latest.get("candidateName") or "New Result Published"
-            body = f"Examination results published for {latest.get('examName', 'Students')}. Tap to check marks."
-            send_push_notification_to_all(title, body, url="/search-result.html")
+            if clean_list:
+                latest = clean_list[-1]
+                title = latest.get("title") or latest.get("candidateName") or "New Result Published"
+                body = f"Examination results published for {latest.get('examName', 'Students')}. Tap to check marks."
+                send_push_notification_to_all(title, body, url="/search-result.html")
         except Exception:
             pass
-    return jsonify({"message": "Results saved"})
+    return jsonify({"success": True, "message": "Results saved", "count": len(data) if data else 0}), 200
+
+@app.route('/api/verify-vid/<path:vid>', methods=['GET'])
+def verify_vid(vid):
+    clean_vid = (vid or "").strip()
+    if not clean_vid:
+        return jsonify({"success": False, "message": "Verification ID is required"}), 400
+    try:
+        doc = results_col.find_one({
+            "$or": [
+                {"vid": {"$regex": f"^{re.escape(clean_vid)}$", "$options": "i"}},
+                {"roll": {"$regex": f"^{re.escape(clean_vid)}$", "$options": "i"}},
+                {"reg": {"$regex": f"^{re.escape(clean_vid)}$", "$options": "i"}}
+            ]
+        }, {"_id": 0})
+        if doc:
+            inst_id = doc.get("instId")
+            inst = institutes_col.find_one({"id": inst_id}, {"_id": 0}) if inst_id else None
+            return jsonify({"success": True, "result": doc, "institute": inst}), 200
+        return jsonify({"success": False, "message": f"No marksheet found matching '{clean_vid}'"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/notices', methods=['POST'])
 def save_notices():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for n in data:
+            if isinstance(n, dict):
+                clean_n = {k: v for k, v in n.items() if k != '_id'}
+                clean_list.append(clean_n)
         notices_col.delete_many({})
-        notices_col.insert_many(data)
+        if clean_list:
+            notices_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "Notices saved"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Notices saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/quicklinks', methods=['POST'])
 def save_quicklinks():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
-        quicklinks_col.delete_many({})
+    quicklinks_col.delete_many({})
+    if data is not None:
         quicklinks_col.insert_one({"links": data})
-        invalidate_sync_cache()
-    return jsonify({"message": "Quicklinks saved"})
+    invalidate_sync_cache()
+    settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "Quicklinks saved"}), 200
 
 @app.route('/api/schemes', methods=['POST'])
 def save_schemes():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data:
+    if data is not None and isinstance(data, list):
+        clean_list = []
+        for s in data:
+            if isinstance(s, dict):
+                clean_s = {k: v for k, v in s.items() if k != '_id'}
+                clean_list.append(clean_s)
         schemes_col.delete_many({})
-        schemes_col.insert_many(data)
+        if clean_list:
+            schemes_col.insert_many(clean_list)
         invalidate_sync_cache()
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
         try:
-            latest = data[-1] if isinstance(data, list) else data
-            title = latest.get("name") or "New Government Scheme Announced"
-            body = latest.get("benefit") or "Check your eligibility and apply online now on IGYR."
-            send_push_notification_to_all(title, body, url="/schemes.html")
+            if clean_list:
+                latest = clean_list[-1]
+                title = latest.get("name") or "New Government Scheme Announced"
+                body = latest.get("benefit") or "Check your eligibility and apply online now on IGYR."
+                send_push_notification_to_all(title, body, url="/schemes.html")
         except Exception:
             pass
-    return jsonify({"message": "Schemes saved"})
+    return jsonify({"success": True, "message": "Schemes saved", "count": len(data) if data else 0}), 200
 
 @app.route('/api/applications', methods=['POST'])
 def save_application():
     data = request.json
     if data:
-        applications_col.update_one({"id": data.get("id")}, {"$set": data}, upsert=True)
+        clean_app = {k: v for k, v in data.items() if k != '_id'}
+        applications_col.update_one({"id": clean_app.get("id")}, {"$set": clean_app}, upsert=True)
         invalidate_sync_cache()
-    return jsonify({"message": "Application saved successfully"})
+    return jsonify({"success": True, "message": "Application saved successfully"}), 200
 
 @app.route('/api/applications/save-all', methods=['POST'])
 def save_all_applications():
     if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
-    if data is not None:
+    if data is not None and isinstance(data, list):
+        clean_list = [{k: v for k, v in a.items() if k != '_id'} for a in data if isinstance(a, dict)]
         applications_col.delete_many({})
-        if len(data) > 0:
-            applications_col.insert_many(data)
+        if clean_list:
+            applications_col.insert_many(clean_list)
         invalidate_sync_cache()
-    return jsonify({"message": "All applications saved successfully"})
+        settings_col.update_one({"id": "system_settings"}, {"$set": {"last_update": time.time()}}, upsert=True)
+    return jsonify({"success": True, "message": "All applications saved successfully", "count": len(data) if data else 0}), 200
+
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
@@ -567,38 +743,63 @@ def save_settings():
         invalidate_sync_cache()
     return jsonify({"message": "Settings saved"})
 
+# ==========================================
+# BANNER ANNOUNCEMENT APIS (Synchronized with Public Site)
+# ==========================================
+
 @app.route('/api/banner', methods=['GET'])
 def get_banner():
-    banner = banner_col.find_one({"id": "active_banner"}, {"_id": 0})
+    # Read global_banner first (used by public site), fallback to active_banner
+    banner = banner_col.find_one({"id": "global_banner"}, {"_id": 0})
     if not banner:
-        return jsonify({
+        banner = banner_col.find_one({"id": "active_banner"}, {"_id": 0})
+    if not banner:
+        banner = {
             "enabled": False,
+            "badge": "📢 OFFICIAL ANNOUNCEMENT",
             "title": "",
             "message": "",
-            "type": "info",
-            "linkText": "",
-            "linkUrl": "",
-            "audience": "all",
-            "startDate": "",
-            "endDate": "",
-            "dismissible": True
-        })
-    return jsonify(banner)
+            "buttonText": "",
+            "buttonUrl": "",
+            "showOncePerSession": True,
+            "updatedAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        }
+    return jsonify(banner), 200
 
 @app.route('/api/admin/banner', methods=['POST'])
 def save_banner():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
-    data = request.json
-    if not data:
-        return jsonify({"error": "Invalid payload"}), 400
-    data["id"] = "active_banner"
-    data["updated_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    banner_col.update_one({"id": "active_banner"}, {"$set": data}, upsert=True)
-    return jsonify({"success": True, "message": "Banner announcement saved successfully", "banner": data})
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    data = request.json or {}
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    banner_doc = {
+        "id": "global_banner",
+        "enabled": bool(data.get('enabled', False)),
+        "badge": str(data.get('badge') or "📢 OFFICIAL ANNOUNCEMENT").strip(),
+        "title": str(data.get('title') or "").strip(),
+        "message": str(data.get('message') or "").strip(),
+        "buttonText": str(data.get('buttonText') or "").strip(),
+        "buttonUrl": str(data.get('buttonUrl') or "").strip(),
+        "showOncePerSession": bool(data.get('showOncePerSession', True)),
+        "updatedAt": now_str,
+        "updated_at": now_str
+    }
+    # Update both global_banner (public portal) and active_banner (admin portal)
+    banner_col.update_one({"id": "global_banner"}, {"$set": banner_doc}, upsert=True)
+    banner_doc_active = banner_doc.copy()
+    banner_doc_active["id"] = "active_banner"
+    banner_col.update_one({"id": "active_banner"}, {"$set": banner_doc_active}, upsert=True)
+    invalidate_sync_cache()
+    return jsonify({"success": True, "message": "Banner announcement saved successfully", "banner": banner_doc}), 200
+
+# ==========================================
+# FCM PUSH NOTIFICATIONS APIS
+# ==========================================
 
 @app.route('/api/admin/broadcast-notification', methods=['POST'])
 def broadcast_notification():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
     data = request.json or {}
     title = (data.get('title') or '').strip()
     body = (data.get('body') or '').strip()
@@ -608,78 +809,139 @@ def broadcast_notification():
         return jsonify({"success": False, "error": "Title and Message Body are required."}), 400
 
     result = send_push_notification_to_all(title, body, url)
-    return jsonify(result)
+    return jsonify(result), 200
+
 
 @app.route('/api/admin/notifications/stats', methods=['GET'])
 def get_notification_stats():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
     total_tokens = fcm_tokens_col.count_documents({})
-    return jsonify({"success": True, "total_subscribers": total_tokens})
+    return jsonify({"success": True, "total_subscribers": total_tokens}), 200
 
 @app.route('/api/admin/notifications/sync-subscribers', methods=['POST'])
 def sync_subscribers():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
-    data = request.json or {}
-    tokens = data.get('tokens') or []
-    if not tokens or not isinstance(tokens, list):
-        return jsonify({"success": False, "error": "tokens array required"}), 400
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
 
-    count = 0
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    for t in tokens:
-        if t and isinstance(t, str):
-            fcm_tokens_col.update_one(
-                {"token": t.strip()},
-                {"$set": {"token": t.strip(), "updated_at": now}},
-                upsert=True
+    tokens_docs = list(fcm_tokens_col.find({}, {"token": 1, "_id": 0}))
+    tokens = [d['token'] for d in tokens_docs if d.get('token')]
+    if not tokens:
+        return jsonify({"success": True, "total_subscribers": 0, "cleaned_count": 0}), 200
+
+    invalid_tokens = []
+    if firebase_admin and firebase_admin._apps:
+        chunk_size = 500
+        for i in range(0, len(tokens), chunk_size):
+            chunk = tokens[i:i + chunk_size]
+            multicast_msg = messaging.MulticastMessage(
+                data={"sync": "1"},
+                tokens=chunk
             )
-            count += 1
-    return jsonify({"success": True, "message": f"Synced {count} subscribers."})
+            try:
+                response = messaging.send_each_for_multicast(multicast_msg, dry_run=True)
+                for idx, resp in enumerate(response.responses):
+                    if not resp.success:
+                        exc = resp.exception
+                        err_name = exc.__class__.__name__ if exc else ''
+                        err_msg = str(exc or '').lower()
+                        err_code = str(getattr(exc, 'code', '')).lower()
+                        is_unregistered = (
+                            isinstance(exc, (messaging.UnregisteredError, messaging.SenderIdMismatchError)) or
+                            any(term in err_name.lower() for term in ['unregistered', 'notfound', 'invalidargument']) or
+                            any(term in err_code for term in ['unregistered', 'not_found', 'not-found', 'invalid']) or
+                            any(term in err_msg for term in [
+                                'unregistered', 'not registered', 'not found', 'not_found',
+                                'invalid', 'mismatch', '404', '410', 'entity was not found',
+                                'registration-token-not-registered', 'invalid argument'
+                            ])
+                        )
+                        if is_unregistered:
+                            invalid_tokens.append(chunk[idx])
+            except Exception as sync_err:
+                print("Sync multicast error:", sync_err)
 
-# WhatsApp Endpoints
+    if invalid_tokens:
+        fcm_tokens_col.delete_many({"token": {"$in": invalid_tokens}})
+
+    remaining = fcm_tokens_col.count_documents({})
+    return jsonify({
+        "success": True,
+        "total_subscribers": remaining,
+        "cleaned_count": len(invalid_tokens)
+    }), 200
+
+# ==========================================
+# WHATSAPP BUSINESS AUTOMATION APIS
+# ==========================================
+
 @app.route('/api/admin/whatsapp/config', methods=['GET'])
 def api_get_whatsapp_config():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
     cfg = get_whatsapp_config()
-    cfg_safe = cfg.copy()
-    raw_token = cfg_safe.get("token") or ""
-    if raw_token:
-        cfg_safe["token_masked"] = raw_token[:6] + "..." + raw_token[-4:]
-        cfg_safe["has_token"] = True
-    else:
-        cfg_safe["token_masked"] = ""
-        cfg_safe["has_token"] = False
-    cfg_safe.pop("token", None)
-    return jsonify({"success": True, "config": cfg_safe})
+    raw_token = cfg.get("token") or ""
+    masked_token = (raw_token[:6] + "..." + raw_token[-4:]) if len(raw_token) > 12 else ("Configured" if raw_token else "")
+
+    recent_logs = []
+    try:
+        logs = list(whatsapp_logs_col.find({}, {"_id": 0}).sort("epoch", -1).limit(20))
+        recent_logs = logs
+    except Exception:
+        pass
+
+    verify_token_val = cfg.get("verify_token") or "igyr_wa_verify_2026"
+    phone_number_id_val = cfg.get("phone_number_id") or ""
+    auto_reply_val = cfg.get("auto_reply_enabled", True)
+
+    return jsonify({
+        "success": True,
+        "webhook_url": "https://igyr-india-get-your-result.onrender.com/api/whatsapp/webhook",
+        "verify_token": verify_token_val,
+        "phone_number_id": phone_number_id_val,
+        "is_token_set": bool(raw_token),
+        "masked_token": masked_token,
+        "auto_reply_enabled": auto_reply_val,
+        "logs": recent_logs,
+        "config": {
+            "verify_token": verify_token_val,
+            "phone_number_id": phone_number_id_val,
+            "has_token": bool(raw_token),
+            "token_masked": masked_token,
+            "auto_reply_enabled": auto_reply_val
+        }
+    }), 200
 
 @app.route('/api/admin/whatsapp/config', methods=['POST'])
 def api_set_whatsapp_config():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
     data = request.json or {}
+    verify_token_val = (data.get('verify_token') or "").strip() or "igyr_wa_verify_2026"
+    phone_number_id_val = (data.get('phone_number_id') or "").strip()
+    token_val = (data.get('token') or "").strip()
+    auto_reply_enabled = bool(data.get('auto_reply_enabled', True))
+
     doc = {
         "id": "whatsapp_config",
-        "enabled": bool(data.get("enabled", False)),
-        "verify_token": (data.get("verify_token") or "igyr_wa_verify_2026").strip(),
-        "phone_number_id": (data.get("phone_number_id") or "").strip(),
-        "waba_id": (data.get("waba_id") or "").strip(),
-        "welcome_message": (data.get("welcome_message") or "").strip(),
-        "not_found_message": (data.get("not_found_message") or "").strip(),
-        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        "verify_token": verify_token_val,
+        "phone_number_id": phone_number_id_val,
+        "auto_reply_enabled": auto_reply_enabled,
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "updatedAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     }
-    new_token = (data.get("token") or "").strip()
-    if new_token:
-        doc["token"] = new_token
+    if token_val:
+        doc["token"] = token_val
     else:
         existing = whatsapp_config_col.find_one({"id": "whatsapp_config"})
         if existing and existing.get("token"):
             doc["token"] = existing["token"]
 
     whatsapp_config_col.update_one({"id": "whatsapp_config"}, {"$set": doc}, upsert=True)
-    return jsonify({"success": True, "message": "WhatsApp configuration updated successfully."})
+    return jsonify({"success": True, "message": "WhatsApp configuration updated successfully."}), 200
 
 @app.route('/api/admin/whatsapp/test-send', methods=['POST'])
 def test_send_whatsapp():
-    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    if not verify_token():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
     data = request.json or {}
     to_phone = (data.get('to_phone') or "").strip()
     test_query = (data.get('query') or "HI").strip()
@@ -707,7 +969,8 @@ def test_send_whatsapp():
         "success": res.get("success", False),
         "message_preview": automated_message,
         "dispatch_result": res
-    })
+    }), (200 if res.get("success") else 200)
+
 
 
 if __name__ == '__main__':

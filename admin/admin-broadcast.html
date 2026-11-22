@@ -140,7 +140,7 @@
                     </p>
                 </div>
                 <div style="display: flex; gap: 10px;">
-                    <a href="index.html" target="_blank" class="btn-outline" style="text-decoration: none; font-size: 13px;">
+                    <a href="https://igyr-india-get-your-result.onrender.com" target="_blank" class="btn-outline" style="text-decoration: none; font-size: 13px;">
                         👁️ Open Public Website ↗
                     </a>
                 </div>
@@ -390,13 +390,54 @@
     </div>
 
     <!-- Scripts -->
-    <script src="js/storage.js?v=1000042"></script>
-    <script src="/announcement-banner.js?v=1000044"></script>
+    <script src="js/storage.js?v=1000045"></script>
+    <script src="announcement-banner.js?v=1000045"></script>
     <script>
         // Check Admin Auth
         const adminToken = sessionStorage.getItem('admin_token');
         if (!adminToken) {
             window.location.href = 'admin-login.html';
+        }
+
+        // Safe JSON Fetch Helper to prevent "<!doctype" JSON parse errors
+        async function safeFetchJson(url, options = {}) {
+            const headers = Object.assign({}, options.headers || {});
+            if (adminToken && !headers['Authorization']) {
+                headers['Authorization'] = 'Bearer ' + adminToken;
+            }
+            if (options.body && !headers['Content-Type']) {
+                headers['Content-Type'] = 'application/json';
+            }
+            options.headers = headers;
+
+            try {
+                const res = await fetch(url, options);
+                const contentType = res.headers.get('content-type') || '';
+                let data = null;
+
+                if (contentType.includes('application/json')) {
+                    try {
+                        data = await res.json();
+                    } catch (parseErr) {
+                        data = { success: false, error: 'Malformed JSON response from server' };
+                    }
+                } else {
+                    const rawText = await res.text();
+                    let preview = rawText.replace(/<[^>]*>?/gm, '').trim().substring(0, 150);
+                    data = {
+                        success: false,
+                        error: `HTTP ${res.status}: ${preview || res.statusText || 'Non-JSON server response'}`
+                    };
+                }
+
+                return { ok: res.ok, status: res.status, data };
+            } catch (networkErr) {
+                return {
+                    ok: false,
+                    status: 0,
+                    data: { success: false, error: networkErr.message || 'Network connection failed' }
+                };
+            }
         }
 
         // Live preview synchronization
@@ -430,14 +471,13 @@
         // Load Banner Data
         async function loadBannerData() {
             try {
-                const res = await fetch('/api/banner');
-                if (res.ok) {
-                    const b = await res.json();
-                    bEnabled.checked = Boolean(b.enabled);
-                    bBadge.value = b.badge || '📢 OFFICIAL ANNOUNCEMENT';
-                    bTitle.value = b.title || '';
-                    bMsg.value = b.message || '';
-                    document.getElementById('banner-frequency').value = (b.showOncePerSession !== false) ? 'once' : 'always';
+                const { ok, data } = await safeFetchJson('/api/banner');
+                if (ok && data) {
+                    bEnabled.checked = Boolean(data.enabled);
+                    bBadge.value = data.badge || '📢 OFFICIAL ANNOUNCEMENT';
+                    bTitle.value = data.title || '';
+                    bMsg.value = data.message || '';
+                    document.getElementById('banner-frequency').value = (data.showOncePerSession !== false) ? 'once' : 'always';
                     updatePreview();
                 }
             } catch (err) {
@@ -466,19 +506,15 @@
             statusMsg.style.display = 'none';
 
             try {
-                const res = await fetch('/api/admin/banner', {
+                const { ok, data } = await safeFetchJson('/api/admin/banner', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + adminToken
-                    },
                     body: JSON.stringify(payload)
                 });
-                const data = await res.json();
+
                 btn.disabled = false;
                 btn.innerHTML = '💾 Save &amp; Publish Announcement Banner';
 
-                if (res.ok && data.success) {
+                if (ok && data.success) {
                     statusMsg.style.display = 'inline';
                     statusMsg.style.color = '#059669';
                     statusMsg.textContent = '✅ Banner settings updated successfully!';
@@ -487,6 +523,7 @@
                     statusMsg.style.display = 'inline';
                     statusMsg.style.color = '#dc2626';
                     statusMsg.textContent = '❌ Failed to save: ' + (data.error || 'Server error');
+                    alert('❌ Failed to save banner: ' + (data.error || 'Server error'));
                 }
             } catch (err) {
                 btn.disabled = false;
@@ -494,6 +531,7 @@
                 statusMsg.style.display = 'inline';
                 statusMsg.style.color = '#dc2626';
                 statusMsg.textContent = '❌ Network error: ' + err.message;
+                alert('❌ Network error: ' + err.message);
             }
             return false;
         }
@@ -516,17 +554,15 @@
         // ==========================================
         // FCM BROADCAST LOGIC
         // ==========================================
-        function loadFcmStats() {
+        async function loadFcmStats() {
             const countEl = document.getElementById('fcm-sub-count');
             if (!countEl) return;
-            fetch('/api/admin/notifications/stats')
-                .then(r => r.json())
-                .then(d => {
-                    countEl.textContent = (d && typeof d.total_subscribers !== 'undefined') ? d.total_subscribers : '0';
-                })
-                .catch(() => {
-                    countEl.textContent = '0';
-                });
+            const { ok, data } = await safeFetchJson('/api/admin/notifications/stats');
+            if (ok && data && typeof data.total_subscribers !== 'undefined') {
+                countEl.textContent = data.total_subscribers;
+            } else {
+                countEl.textContent = '0';
+            }
         }
 
         async function handleFcmBroadcast(e) {
@@ -546,24 +582,27 @@
             statusMsg.style.display = 'none';
 
             try {
-                const res = await fetch('/api/admin/broadcast-notification', {
+                const { ok, data } = await safeFetchJson('/api/admin/broadcast-notification', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + adminToken
-                    },
                     body: JSON.stringify({ title, body, url })
                 });
-                const data = await res.json();
+
                 btn.disabled = false;
                 btn.innerHTML = '🚀 Send Push Notification to All Devices';
 
-                if (res.ok && data.success) {
-                    statusMsg.style.display = 'inline';
-                    statusMsg.style.color = '#059669';
-                    statusMsg.textContent = `✅ Successfully sent to ${data.sent_count} device(s)!`;
-                    const cleanNote = data.cleaned_count > 0 ? `\n🧹 Removed ${data.cleaned_count} uninstalled/deleted device(s)` : '';
-                    alert(`✅ Push Notification Sent!\n\nDelivered: ${data.sent_count} device(s)\nFailed: ${data.failure_count || 0}${cleanNote}\nActive Subscribers Remaining: ${data.total_devices || data.sent_count}`);
+                if (ok && data.success) {
+                    if (data.is_key_expired) {
+                        statusMsg.style.display = 'inline';
+                        statusMsg.style.color = '#d97706';
+                        statusMsg.textContent = '📢 Notice Published to Portal! (FCM Key Needs Update in Firebase Console)';
+                        alert(`📢 Official Notice Published to Portal!\n\nYour broadcast announcement has been saved and is now live across the portal for all visitors.\n\n⚠️ Note on Background Phone Push:\nGoogle Cloud rejected key ID 4cb1188a (Invalid JWT Signature - key was deleted in Firebase Console).\n\nTo enable lockscreen phone push:\n1. Open Firebase Console: https://console.firebase.google.com/project/igyr-53359/settings/serviceaccounts/adminsdk\n2. Click "Generate new private key"\n3. Update FIREBASE_SERVICE_ACCOUNT_JSON in Render.`);
+                    } else {
+                        statusMsg.style.display = 'inline';
+                        statusMsg.style.color = '#059669';
+                        statusMsg.textContent = `✅ Successfully sent to ${data.sent_count} device(s)!`;
+                        const cleanNote = data.cleaned_count > 0 ? `\n🧹 Removed ${data.cleaned_count} uninstalled/deleted device(s)` : '';
+                        alert(`✅ Push Notification Sent!\n\nDelivered: ${data.sent_count} device(s)\nFailed: ${data.failure_count || 0}${cleanNote}\nActive Subscribers Remaining: ${data.total_devices || data.sent_count}`);
+                    }
                     loadFcmStats();
                 } else {
                     statusMsg.style.display = 'inline';
@@ -577,6 +616,7 @@
                 statusMsg.style.display = 'inline';
                 statusMsg.style.color = '#dc2626';
                 statusMsg.textContent = '❌ Network error: ' + err.message;
+                alert('❌ Network error: ' + err.message);
             }
             return false;
         }
@@ -590,19 +630,22 @@
             btn.innerHTML = '⏳ Verifying...';
 
             try {
-                const res = await fetch('/api/admin/notifications/sync-subscribers', {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + adminToken }
+                const { ok, data } = await safeFetchJson('/api/admin/notifications/sync-subscribers', {
+                    method: 'POST'
                 });
-                const data = await res.json();
+
                 btn.disabled = false;
                 btn.innerHTML = '🧹 Clean Stale';
 
-                if (data.success) {
+                if (ok && data.success) {
                     countEl.textContent = data.total_subscribers;
-                    alert(`✅ Subscriber Verification Complete!\n\nActive Devices: ${data.total_subscribers}\nUninstalled / Revoked Devices Removed: ${data.cleaned_count}`);
+                    if (data.is_key_expired) {
+                        alert(`ℹ️ Total Registered Subscribers: ${data.total_subscribers}\n\n⚠️ Google FCM dry-run verification was paused because key ID 4cb1188a is expired on Firebase Console.\n\nAll subscriber tokens remain safely registered in your database.`);
+                    } else {
+                        alert(`✅ Subscriber Verification Complete!\n\nActive Devices: ${data.total_subscribers}\nUninstalled / Revoked Devices Removed: ${data.cleaned_count || 0}`);
+                    }
                 } else {
-                    alert('Sync error: ' + (data.error || 'Failed to sync with Google'));
+                    alert('Sync error: ' + (data.error || 'Failed to sync subscribers'));
                 }
             } catch(e) {
                 btn.disabled = false;
@@ -637,11 +680,8 @@
         async function loadWhatsAppConfig() {
             if (!adminToken) return;
             try {
-                const res = await fetch('/api/admin/whatsapp/config', {
-                    headers: { 'Authorization': 'Bearer ' + adminToken }
-                });
-                if (res.ok) {
-                    const data = await res.json();
+                const { ok, data } = await safeFetchJson('/api/admin/whatsapp/config');
+                if (ok && data) {
                     if (data.phone_number_id) {
                         document.getElementById('wa-phone-number-id').value = data.phone_number_id;
                     }
@@ -714,19 +754,15 @@
             statusMsg.style.display = 'none';
 
             try {
-                const res = await fetch('/api/admin/whatsapp/config', {
+                const { ok, data } = await safeFetchJson('/api/admin/whatsapp/config', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + adminToken
-                    },
                     body: JSON.stringify(payload)
                 });
-                const data = await res.json();
+
                 btn.disabled = false;
                 btn.innerHTML = '💾 Save WhatsApp Automation Settings';
 
-                if (res.ok && data.success) {
+                if (ok && data.success) {
                     statusMsg.style.display = 'inline';
                     statusMsg.style.color = '#059669';
                     statusMsg.textContent = '✅ WhatsApp settings saved!';
@@ -737,6 +773,7 @@
                     statusMsg.style.display = 'inline';
                     statusMsg.style.color = '#dc2626';
                     statusMsg.textContent = '❌ Error: ' + (data.error || 'Failed to save');
+                    alert('❌ Error: ' + (data.error || 'Failed to save'));
                 }
             } catch(err) {
                 btn.disabled = false;
@@ -744,6 +781,7 @@
                 statusMsg.style.display = 'inline';
                 statusMsg.style.color = '#dc2626';
                 statusMsg.textContent = '❌ Network error: ' + err.message;
+                alert('❌ Network error: ' + err.message);
             }
             return false;
         }
@@ -760,22 +798,18 @@
             btn.innerHTML = '⏳ Generating & Sending...';
 
             try {
-                const res = await fetch('/api/admin/whatsapp/test-send', {
+                const { ok, data } = await safeFetchJson('/api/admin/whatsapp/test-send', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + adminToken
-                    },
                     body: JSON.stringify({ to_phone: phone, query: query })
                 });
-                const data = await res.json();
+
                 btn.disabled = false;
                 btn.innerHTML = '🚀 Send Test Automated Message';
 
-                if (data.success) {
+                if (ok && data.success) {
                     alert(`✅ Test Message Dispatched Successfully to ${phone}!\n\nAutomated Message Sent:\n\n${data.message_preview}`);
                 } else {
-                    alert(`ℹ️ Message Generated via Automation Engine:\n\n${data.message_preview}\n\n⚠️ Meta Dispatch Status: ${data.dispatch_result ? (data.dispatch_result.error || 'Failed') : (data.error || 'Check Meta Token')}\n\nNote: If Meta Token is not added, messages are logged in Recent Webhook Activity for review.`);
+                    alert(`ℹ️ Message Generated via Automation Engine:\n\n${data.message_preview || ''}\n\n⚠️ Meta Dispatch Status: ${data.dispatch_result ? (data.dispatch_result.error || 'Failed') : (data.error || 'Check Meta Token')}\n\nNote: If Meta Token is not added, messages are logged in Recent Webhook Activity for review.`);
                 }
                 loadWhatsAppConfig();
             } catch(err) {
