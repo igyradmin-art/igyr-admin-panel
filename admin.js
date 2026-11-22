@@ -411,7 +411,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const publishedExams = [];
             
             allResults.forEach(r => {
-                if (r.status === 'PUBLISHED') {
+                if (r.status === 'PUBLISHED' && !r.hideNotice) {
                     let key = r.instId + '|||' + r.exam;
                     if (!seen.has(key)) {
                         seen.add(key);
@@ -429,7 +429,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             if (publishedExams.length === 0) {
-                autoNoticeList.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#777;">No automatic result notices currently published.</td></tr>';
+                autoNoticeList.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#777;">No automatic result notices currently active.</td></tr>';
             } else {
                 publishedExams.forEach(pe => {
                     let tr = document.createElement('tr');
@@ -437,7 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td>${pe.instName} <br><small style="color:#888;">(${pe.instId})</small></td>
                         <td>${pe.exam}</td>
                         <td>
-                            <button class="btn btn-outline" style="color: #e55039; border-color: #e55039; padding: 2px 10px; font-size: 0.8rem;" onclick="deleteAutoNotice('${pe.instId}', '${pe.exam}')">Delete Notice</button>
+                            <button class="btn btn-outline" style="color: #e55039; border-color: #e55039; padding: 2px 10px; font-size: 0.8rem;" onclick="deleteAutoNotice('${pe.instId}', '${pe.exam}')">Remove Notice</button>
                         </td>
                     `;
                     autoNoticeList.appendChild(tr);
@@ -446,23 +446,19 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         window.deleteAutoNotice = function(instId, examName) {
-            if (confirm(`Are you sure you want to delete the notice for '${examName}'? (This will unpublish the result)`)) {
+            if (confirm(`Remove the public notice for '${examName}'?\n\n(Note: The student examination results will REMAIN securely PUBLISHED and searchable for students in the system).`)) {
                 let allResults = getResults();
                 let updated = false;
                 allResults.forEach(r => {
                     if (r.instId === instId && r.exam === examName) {
-                        r.status = 'DRAFT'; // unpublish it to remove the notice
+                        r.hideNotice = true; // Only hides the notice banner, results stay safely PUBLISHED!
                         updated = true;
                     }
                 });
                 if (updated) {
                     saveResults(allResults);
                     renderAutoNotices();
-                    
-                    // Also trigger the geographical scan again since a result was unpublished
-                    if(typeof window.renderGeoTable === 'function') window.renderGeoTable();
-                    
-                    alert("Automatic Result Notice deleted successfully!");
+                    alert("Automatic Result Notice removed from the public notice board successfully!\n\nThe examination results remain safely published and accessible to students.");
                 }
             }
         };
