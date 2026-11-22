@@ -52,6 +52,14 @@ whatsapp_config_col = db['whatsapp_config']
 whatsapp_logs_col = db['whatsapp_logs']
 soc_control_col = db['soc_control']
 soc_logs_col = db['soc_security_logs']
+# Automatic database self-healing for published results
+try:
+    results_col.update_many(
+        {"hideNotice": True, "status": "DRAFT"},
+        {"$set": {"status": "PUBLISHED"}}
+    )
+except Exception:
+    pass
 
 # Initialize Firebase Admin SDK for FCM Web Push
 import firebase_admin
@@ -354,7 +362,7 @@ def verify_token():
 # Sync Cache
 _sync_cache = None
 _sync_cache_time = 0
-CACHE_TTL = 15
+CACHE_TTL = 1
 
 def invalidate_sync_cache():
     global _sync_cache
@@ -636,6 +644,45 @@ def save_results():
         except Exception:
             pass
     return jsonify({"success": True, "message": "Results saved", "count": len(data) if data else 0}), 200
+
+@app.route('/api/admin/dismiss-auto-notice', methods=['POST'])
+def dismiss_auto_notice():
+    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json or {}
+    inst_id = (data.get('instId') or "").strip()
+    exam = (data.get('exam') or "").strip()
+    if not inst_id or not exam:
+        return jsonify({"error": "Missing instId or exam"}), 400
+    
+    # Safely flag hideNotice: True and GUARANTEE status remains PUBLISHED without wiping or deleting any records
+    results_col.update_many(
+        {"instId": inst_id, "exam": exam},
+        {"$set": {"hideNotice": True, "status": "PUBLISHED"}}
+    )
+    invalidate_sync_cache()
+    return jsonify({
+        "success": True,
+        "message": f"Notice for '{exam}' removed from public ticker. Results remain securely published."
+    }), 200
+
+@app.route('/api/admin/restore-auto-notice', methods=['POST'])
+def restore_auto_notice():
+    if not verify_token(): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json or {}
+    inst_id = (data.get('instId') or "").strip()
+    exam = (data.get('exam') or "").strip()
+    if not inst_id or not exam:
+        return jsonify({"error": "Missing instId or exam"}), 400
+    
+    results_col.update_many(
+        {"instId": inst_id, "exam": exam},
+        {"$set": {"hideNotice": False, "status": "PUBLISHED"}}
+    )
+    invalidate_sync_cache()
+    return jsonify({
+        "success": True,
+        "message": f"Notice for '{exam}' restored to public ticker."
+    }), 200
 
 @app.route('/api/verify-vid/<path:vid>', methods=['GET'])
 def verify_vid(vid):

@@ -407,6 +407,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const allResults = getResults();
             const insts = getInstitutes();
             
+            // Auto-heal any results that might have been mistakenly set to DRAFT by previous notice removal
+            allResults.forEach(r => {
+                if (r.hideNotice && r.status === 'DRAFT') {
+                    r.status = 'PUBLISHED';
+                }
+            });
+
             const seen = new Set();
             const publishedExams = [];
             
@@ -429,15 +436,15 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             if (publishedExams.length === 0) {
-                autoNoticeList.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#777;">No automatic result notices currently active.</td></tr>';
+                autoNoticeList.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#777; padding:15px;">No automatic result notices currently active on public board.</td></tr>';
             } else {
                 publishedExams.forEach(pe => {
                     let tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${pe.instName} <br><small style="color:#888;">(${pe.instId})</small></td>
-                        <td>${pe.exam}</td>
+                        <td><strong>${pe.exam}</strong> <span style="font-size:10px; background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-weight:700;">PUBLISHED</span></td>
                         <td>
-                            <button class="btn btn-outline" style="color: #e55039; border-color: #e55039; padding: 2px 10px; font-size: 0.8rem;" onclick="deleteAutoNotice('${pe.instId}', '${pe.exam}')">Remove Notice</button>
+                            <button class="btn btn-outline" style="color: #e55039; border-color: #e55039; padding: 2px 10px; font-size: 0.8rem;" onclick="deleteAutoNotice('${pe.instId}', '${pe.exam.replace(/'/g, "\\'")}')">Remove Notice</button>
                         </td>
                     `;
                     autoNoticeList.appendChild(tr);
@@ -446,18 +453,35 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         window.deleteAutoNotice = function(instId, examName) {
-            if (confirm(`Remove the public notice for '${examName}'?\n\n(Note: The student examination results will REMAIN securely PUBLISHED and searchable for students in the system).`)) {
+            if (confirm(`Remove the public notice for '${examName}'?\n\nIMPORTANT: The student examination results will REMAIN 100% SECURELY PUBLISHED and searchable for students in the system. Only the notice announcement will be removed from the public notice board.`)) {
                 let allResults = getResults();
                 let updated = false;
                 allResults.forEach(r => {
                     if (r.instId === instId && r.exam === examName) {
-                        r.hideNotice = true; // Only hides the notice banner, results stay safely PUBLISHED!
+                        r.hideNotice = true;
+                        r.status = 'PUBLISHED'; // STRICT GUARANTEE: Never unpublish results!
                         updated = true;
                     }
                 });
                 if (updated) {
-                    saveResults(allResults);
+                    if (typeof persistLocalCache === 'function') persistLocalCache();
                     renderAutoNotices();
+                    
+                    // Call dedicated server endpoint to update MongoDB safely without modifying or deleting results
+                    fetch(API_BASE + '/admin/dismiss-auto-notice', {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ instId: instId, exam: examName })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        console.log("Auto-notice dismissed successfully:", data);
+                    })
+                    .catch(err => {
+                        console.warn("Backend notice dismiss fallback:", err);
+                        if (typeof saveResults === 'function') saveResults(allResults);
+                    });
+
                     alert("Automatic Result Notice removed from the public notice board successfully!\n\nThe examination results remain safely published and accessible to students.");
                 }
             }
