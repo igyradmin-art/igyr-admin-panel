@@ -71,11 +71,11 @@
     <script src="js/storage.js?v=1000046"></script>
     <script src="js/admin.js?v=1000046"></script>
     <script>
-        // Check live SOC Admin Login state on load
-        fetch('/api/admin/login-status')
-            .then(res => res.json())
-            .then(data => {
-                if (data.admin_login_enabled === false) {
+        // Live SOC Admin Login state listener
+        function checkSocAdminLoginStatus() {
+            fetch('/api/admin/login-status')
+                .then(res => res.json())
+                .then(data => {
                     const lockBox = document.getElementById('soc-lock-box');
                     const btn = document.getElementById('btn-admin-login');
                     const u = document.getElementById('admin-user');
@@ -83,15 +83,26 @@
                     const dot = document.getElementById('soc-dot');
                     const statusText = document.getElementById('soc-status-text');
 
-                    if (lockBox) lockBox.style.display = 'block';
-                    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.style.cursor = 'not-allowed'; btn.textContent = 'ACCESS RESTRICTED BY SOC'; }
-                    if (u) u.disabled = true;
-                    if (p) p.disabled = true;
-                    if (dot) dot.style.background = '#ef4444';
-                    if (statusText) statusText.textContent = 'SOC Access Control: Admin Login LOCKED';
-                }
-            })
-            .catch(() => {});
+                    if (data.admin_login_enabled === false) {
+                        if (lockBox) lockBox.style.display = 'block';
+                        if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.style.cursor = 'not-allowed'; btn.textContent = 'ACCESS RESTRICTED BY SOC'; }
+                        if (u) u.disabled = true;
+                        if (p) p.disabled = true;
+                        if (dot) dot.style.background = '#ef4444';
+                        if (statusText) statusText.textContent = 'SOC Access Control: Admin Login LOCKED';
+                    } else {
+                        if (lockBox) lockBox.style.display = 'none';
+                        if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; btn.textContent = 'LOGIN TO SYSTEM'; }
+                        if (u) u.disabled = false;
+                        if (p) p.disabled = false;
+                        if (dot) dot.style.background = '#10b981';
+                        if (statusText) statusText.textContent = 'SOC Defence System: Armed & Operational';
+                    }
+                })
+                .catch(() => {});
+        }
+        checkSocAdminLoginStatus();
+        setInterval(checkSocAdminLoginStatus, 3500);
     </script>
 </body>
 </html>

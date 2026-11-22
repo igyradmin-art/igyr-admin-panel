@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     sessionStorage.setItem('admin_token', data.token);
                     window.location.href = 'admin-dashboard.html';
                 } else {
-                    alert('Invalid credentials');
+                    alert(data.message || 'Invalid credentials');
                 }
             })
             .catch(err => {
