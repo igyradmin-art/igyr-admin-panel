@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Admin Login - IGYR</title>
     <!-- Favicon & Touch Icons -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="icon" type="image/png" href="/favicon.png">
@@ -14,20 +16,82 @@
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" content="#071d49">
 
-    <title>Admin Login</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/dashboard.css">
+    <style>
+        .login-card {
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 20px 45px rgba(6, 43, 99, 0.12);
+            padding: 35px 30px;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+        }
+        .soc-lock-box {
+            background: #fef2f2;
+            border: 1px solid #f87171;
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 20px;
+            color: #991b1b;
+            font-size: 13px;
+            line-height: 1.4;
+            display: none;
+        }
+    </style>
 </head>
-<body class="bg-light">
+<body class="bg-light" style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: #f3f8ff;">
     <div class="login-card">
-        <h2>Super Admin Login</h2>
+        <div style="margin-bottom: 18px;">
+            <img src="igyr-logo.jpg" alt="IGYR Logo" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; box-shadow: 0 4px 15px rgba(0,0,0,0.1); border: 2px solid #062b63;">
+        </div>
+        <h2 style="color: #062b63; margin-bottom: 6px; font-weight: 800; font-size: 24px;">Super Admin Login</h2>
+        <p style="color: #64748b; font-size: 13px; margin-bottom: 22px;">IGYR Central Operations & Management Deck</p>
+
+        <div id="soc-lock-box" class="soc-lock-box">
+            <div style="font-weight: 800; font-size: 14px; margin-bottom: 4px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <span>🔒</span> SOC ACCESS LOCK ENGAGED
+            </div>
+            <div>Super Admin Login has been restricted by Security Operations Centre Command.</div>
+        </div>
+
         <form id="admin-login-form">
-            <input type="text" id="admin-user" placeholder="Username (admin)" required>
-            <input type="password" id="admin-pass" placeholder="Password (admin123)" required>
-            <button type="submit" class="btn btn-primary">LOGIN</button>
+            <input type="text" id="admin-user" placeholder="Username (admin)" required style="width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; box-sizing: border-box;">
+            <input type="password" id="admin-pass" placeholder="Password (••••••••)" required style="width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 20px; box-sizing: border-box;">
+            <button type="submit" id="btn-admin-login" class="btn btn-primary" style="width: 100%; padding: 12px; font-weight: 700;">LOGIN TO SYSTEM</button>
         </form>
+
+        <div style="margin-top: 25px; padding-top: 18px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981;" id="soc-dot"></span>
+            <span id="soc-status-text">SOC Defence System: Armed</span>
+        </div>
     </div>
-    <script src="js/storage.js?v=1000035"></script>
-    <script src="js/admin.js"></script>
+
+    <script src="js/storage.js?v=1000046"></script>
+    <script src="js/admin.js?v=1000046"></script>
+    <script>
+        // Check live SOC Admin Login state on load
+        fetch('/api/admin/login-status')
+            .then(res => res.json())
+            .then(data => {
+                if (data.admin_login_enabled === false) {
+                    const lockBox = document.getElementById('soc-lock-box');
+                    const btn = document.getElementById('btn-admin-login');
+                    const u = document.getElementById('admin-user');
+                    const p = document.getElementById('admin-pass');
+                    const dot = document.getElementById('soc-dot');
+                    const statusText = document.getElementById('soc-status-text');
+
+                    if (lockBox) lockBox.style.display = 'block';
+                    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.style.cursor = 'not-allowed'; btn.textContent = 'ACCESS RESTRICTED BY SOC'; }
+                    if (u) u.disabled = true;
+                    if (p) p.disabled = true;
+                    if (dot) dot.style.background = '#ef4444';
+                    if (statusText) statusText.textContent = 'SOC Access Control: Admin Login LOCKED';
+                }
+            })
+            .catch(() => {});
+    </script>
 </body>
 </html>
